@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ESNext",
+    "module": "commonjs",
     "lib": ["ES2020"],
     "declaration": false,
     "declarationMap": false,
@@ -18,11 +18,6 @@
     "resolveJsonModule": true,
     "moduleResolution": "node",
     "allowSyntheticDefaultImports": true,
-    "isolatedModules": false,
-    "noImplicitAny": false,
-    "noImplicitThis": false,
-    "strictNullChecks": false,
-    "strictFunctionTypes": false,
     "baseUrl": ".",
     "paths": {
       "@skyzer/shared/*": ["packages/shared/src/*"],

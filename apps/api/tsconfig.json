@@ -3,10 +3,12 @@
   "compilerOptions": {
     "outDir": "../../dist/apps/api",
     "baseUrl": ".",
+    "rootDir": "./src",
     "paths": {
       "@skyzer/shared": ["../../packages/shared/src"],
       "@skyzer/db": ["../../packages/db/src"]
     }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*spec.ts"]
 }
