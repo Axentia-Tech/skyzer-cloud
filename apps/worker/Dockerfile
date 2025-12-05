@@ -8,6 +8,9 @@ COPY apps/worker/ ./apps/worker/
 
 RUN npm install -g pnpm && pnpm install --frozen-lockfile
 
+# Generate Prisma Client BEFORE building
+RUN pnpm --filter @skyzer/db generate
+
 WORKDIR /app/apps/worker
 
 RUN pnpm build

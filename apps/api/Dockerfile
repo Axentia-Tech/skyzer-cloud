@@ -13,9 +13,11 @@ COPY apps/api/ ./apps/api/
 # Install dependencies
 RUN npm install -g pnpm && pnpm install --frozen-lockfile
 
+# Generate Prisma Client BEFORE building
+RUN pnpm --filter @skyzer/db generate
+
 # Build
 RUN pnpm --filter @skyzer/api build
-RUN pnpm --filter @skyzer/db generate
 
 # Production stage
 FROM node:20-alpine
