@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020"],
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "strict": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "useUnknownInCatchVariables": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@skyzer/shared/*": ["packages/shared/src/*"],
+      "@skyzer/db/*": ["packages/db/src/*"],
+      "@skyzer/shared": ["packages/shared/src"],
+      "@skyzer/db": ["packages/db/src"]
+    },
+    "types": ["node"]
+  },
+  "exclude": ["node_modules", "dist"],
+  "include": []
+}

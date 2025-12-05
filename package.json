@@ -1,0 +1,39 @@
+{
+  "name": "skyzer-cloud",
+  "version": "1.0.0",
+  "description": "Skyzer Cloud - Modern Game Hosting Platform (Paymenter-like with Pterodactyl + Tebex)",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"pnpm -r --parallel dev\"",
+    "dev:web": "pnpm --filter @skyzer/web dev",
+    "build": "pnpm -r build",
+    "start": "pnpm -r start",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm -r test:e2e",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @skyzer/db migrate:deploy",
+    "db:generate": "pnpm --filter @skyzer/db prisma generate",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "@types/passport-jwt": "^4.0.1",
+    "concurrently": "^8.2.2",
+    "prisma": "^5.22.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

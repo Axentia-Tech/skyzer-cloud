@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/api",
+    "baseUrl": ".",
+    "paths": {
+      "@skyzer/shared": ["../../packages/shared/src"],
+      "@skyzer/db": ["../../packages/db/src"]
+    }
+  },
+  "include": ["src/**/*"]
+}

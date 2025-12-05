@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: skyzer-postgres
+    environment:
+      POSTGRES_USER: skyzer
+      POSTGRES_PASSWORD: skyzer-password-change-me
+      POSTGRES_DB: skyzer_cloud
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    networks:
+      - skyzer-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U skyzer']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: skyzer-redis
+    ports:
+      - '6379:6379'
+    networks:
+      - skyzer-network
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: skyzer-api
+    environment:
+      DATABASE_URL: postgresql://skyzer:skyzer-password-change-me@postgres:5432/skyzer_cloud
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-jwt-secret-key-change-me
+      PTERODACTYL_URL: http://pterodactyl:8080
+      PTERODACTYL_API_KEY: ${PTERODACTYL_API_KEY:-your-pterodactyl-key}
+      TEBEX_SECRET: ${TEBEX_SECRET:-your-tebex-secret}
+      API_PORT: 3001
+      NODE_ENV: production
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - skyzer-network
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+
+  # Background Worker
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: skyzer-worker
+    environment:
+      DATABASE_URL: postgresql://skyzer:skyzer-password-change-me@postgres:5432/skyzer_cloud
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PTERODACTYL_URL: http://pterodactyl:8080
+      PTERODACTYL_API_KEY: ${PTERODACTYL_API_KEY:-your-pterodactyl-key}
+      NODE_ENV: production
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - skyzer-network
+    volumes:
+      - ./apps/worker/src:/app/apps/worker/src
+
+  # Frontend
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: skyzer-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+    networks:
+      - skyzer-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: skyzer-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+      - web
+    networks:
+      - skyzer-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  skyzer-network:
+    driver: bridge

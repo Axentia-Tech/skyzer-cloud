@@ -1,0 +1,276 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  PROVISIONING
+  ACTIVE
+  CANCELLED
+  SUSPENDED
+}
+
+// ===== USERS =====
+model User {
+  id                    String   @id @default(cuid())
+  email                 String   @unique
+  passwordHash          String
+  firstName             String?
+  lastName              String?
+  isEmailVerified       Boolean  @default(false)
+  emailVerifiedAt       DateTime?
+  pteroUserId           Int?     @unique
+  pteroUsername         String?
+  role                  UserRole @default(USER)
+  twoFactorEnabled      Boolean  @default(false)
+  twoFactorSecret       String?
+  lastLoginAt           DateTime?
+  isActive              Boolean  @default(true)
+  isSuspended           Boolean  @default(false)
+  suspendedAt           DateTime?
+  suspensionReason      String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  orders                Order[]
+  servers               Server[]
+  invoices              Invoice[]
+  auditLogs             AuditLog[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens   PasswordResetToken[]
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ===== PRODUCTS / PLANS =====
+model Product {
+  id                  String   @id @default(cuid())
+  name                String
+  description         String?
+  slug                String   @unique
+  priceAmount         Float
+  priceCurrency       String   @default("EUR")
+  billingCycle        String   @default("monthly") // monthly, yearly, one-time
+  isFree              Boolean  @default(false)
+  isActive            Boolean  @default(true)
+  tebexProductId      Int?
+  pteroEggId          Int?
+  pteroNestId         Int?
+  
+  // Limits (JSON)
+  limits              Json     // { "ram": 2048, "cpu": 100, "disk": 10240, "databases": 1, "backups": 3, "slots": 10 }
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  orders              Order[]
+  
+  @@index([isActive])
+  @@index([tebexProductId])
+}
+
+// ===== ORDERS / SUBSCRIPTIONS =====
+model Order {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId           String
+  product             Product  @relation(fields: [productId], references: [id])
+  
+  status              OrderStatus @default(PENDING)
+  tebexOrderId        String?  @unique
+  tebexCheckoutId     String?
+  paymentAmount       Float
+  paymentCurrency     String   @default("EUR")
+  
+  // Renewal info
+  isRecurring         Boolean  @default(false)
+  nextRenewalDate     DateTime?
+  lastRenewalDate     DateTime?
+  renewalStatus       String?  // active, cancelled, failed
+  cancellationReason  String?
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  paidAt              DateTime?
+  expiresAt           DateTime?
+
+  server              Server?
+  webhookLogs         WebhookLog[]
+  invoices            Invoice[]
+  provisioning        ProvisioningJob[]
+
+  @@index([userId])
+  @@index([productId])
+  @@index([status])
+  @@index([tebexOrderId])
+  @@index([createdAt])
+}
+
+// ===== SERVERS =====
+model Server {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId             String   @unique
+  order               Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  pteroServerId       Int?
+  pteroNodeId         Int?
+  ip                  String?
+  port                Int?
+  hostname            String?
+  status              String   @default("pending") // pending, provisioning, active, suspended, terminated
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  terminatedAt        DateTime?
+
+  provisioning        ProvisioningJob[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([pteroServerId])
+}
+
+// ===== PROVISIONING JOBS =====
+model ProvisioningJob {
+  id                  String   @id @default(cuid())
+  serverId            String
+  server              Server     @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  orderId             String
+  order               Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId              String
+  
+  jobType             String   // create_server, delete_server, update_limits, sync_status
+  status              String   @default("pending") // pending, processing, completed, failed
+  
+  payload             Json?    // Job data (egg ID, node selection, etc)
+  result              Json?    // Result of job execution
+  error               String?
+  
+  retries             Int      @default(0)
+  maxRetries          Int      @default(3)
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  completedAt         DateTime?
+  nextRetryAt         DateTime?
+
+  @@index([status])
+  @@index([serverId])
+  @@index([orderId])
+  @@index([nextRetryAt])
+}
+
+// ===== INVOICES / BILLING =====
+model Invoice {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId             String
+  order               Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  invoiceNumber       String   @unique
+  amount              Float
+  currency            String   @default("EUR")
+  status              String   @default("unpaid") // unpaid, paid, overdue, cancelled
+  
+  dueDateAt           DateTime?
+  paidAt              DateTime?
+  
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ===== WEBHOOKS & LOGGING =====
+model WebhookLog {
+  id                  String   @id @default(cuid())
+  orderId             String
+  order               Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  provider            String   // tebex, pterodactyl
+  eventType           String   // order.paid, order.failed, etc
+  
+  payload             Json
+  signature           String?
+  isValid             Boolean  @default(true)
+  
+  processed           Boolean  @default(false)
+  processedAt         DateTime?
+  result              Json?
+  error               String?
+  
+  createdAt           DateTime @default(now())
+
+  @@index([provider])
+  @@index([processed])
+  @@index([createdAt])
+}
+
+// ===== AUDIT LOGGING =====
+model AuditLog {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  action              String   // user.register, order.create, server.delete, admin.create_product, etc
+  resourceType        String?  // User, Order, Server, Product
+  resourceId          String?
+  
+  changes             Json?    // What changed (before/after)
+  metadata            Json?    // Additional context (IP, User-Agent, etc)
+  
+  createdAt           DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ===== CONFIG / SECRETS =====
+model SystemConfig {
+  id                  String   @id @default(cuid())
+  key                 String   @unique
+  value               String
+  description         String?
+  updatedAt           DateTime @updatedAt
+}
