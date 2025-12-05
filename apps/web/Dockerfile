@@ -6,7 +6,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
 COPY packages/ ./packages/
 COPY apps/web/ ./apps/web/
 
-RUN npm install -g pnpm && pnpm install --frozen-lockfile
+RUN npm install -g pnpm && pnpm install --no-frozen-lockfile
 
 WORKDIR /app/apps/web
 
