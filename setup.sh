@@ -370,8 +370,17 @@ echo ""
 echo "============================"
 echo ""
 
+# Get absolute path to script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PHP_DIR="$SCRIPT_DIR/php"
+
 # Navigate to php directory
-cd php
+cd "$PHP_DIR" || {
+    print_error "Cannot access php/ directory"
+    exit 1
+}
+
+print_info "Working in: $(pwd)"
 
 # Install Composer dependencies
 echo "Installing Composer dependencies..."
@@ -384,36 +393,79 @@ fi
 
 echo ""
 
-# Create .env file
-if [ ! -f .env ]; then
-    if [ -f .env.example ]; then
+# Define paths
+ENV_EXAMPLE_PATH="$PHP_DIR/.env.example"
+ENV_PATH="$PHP_DIR/.env"
+
+# Check if .env.example exists, create if not
+if [ ! -f "$ENV_EXAMPLE_PATH" ]; then
+    print_info "Creating .env.example from template..."
+    
+    # Create .env.example if it doesn't exist
+    cat > "$ENV_EXAMPLE_PATH" << 'EOF'
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=skyzer_cloud
+DB_USER=postgres
+DB_PASSWORD=
+
+# Application
+APP_URL=http://localhost
+APP_ENV=development
+
+# JWT
+JWT_SECRET=your-secret-key-change-this-in-production
+
+# Pterodactyl
+PTERODACTYL_URL=https://pterodactyl.example.com
+PTERODACTYL_API_KEY=your-pterodactyl-api-key
+
+# Tebex
+TEBEX_SECRET_KEY=your-tebex-secret-key
+TEBEX_PUBLIC_KEY=your-tebex-public-key
+EOF
+    print_success ".env.example created at $ENV_EXAMPLE_PATH"
+else
+    print_success ".env.example found at $ENV_EXAMPLE_PATH"
+fi
+
+# Now create .env from .env.example
+if [ ! -f "$ENV_PATH" ]; then
+    if [ -f "$ENV_EXAMPLE_PATH" ]; then
         echo "Creating .env file from template..."
-        cp .env.example .env
-        print_success ".env file created"
+        cp "$ENV_EXAMPLE_PATH" "$ENV_PATH"
+        print_success ".env file created at $ENV_PATH"
         print_warning "Please edit php/.env with your configuration before continuing"
     else
-        print_error ".env.example not found"
+        print_error "Could not create .env file - .env.example not found at $ENV_EXAMPLE_PATH"
         exit 1
     fi
 else
-    print_success ".env file already exists"
+    print_success ".env file already exists at $ENV_PATH"
 fi
 
 echo ""
 
 # Copy assets if they don't exist
-if [ ! -d "assets/product_pictures" ] && [ -d "../apps/web/public/assets/product_pictures" ]; then
+ASSETS_SOURCE="$SCRIPT_DIR/apps/web/public/assets/product_pictures"
+ASSETS_DEST="$PHP_DIR/assets/product_pictures"
+
+if [ ! -d "$ASSETS_DEST" ] && [ -d "$ASSETS_SOURCE" ]; then
     echo "Copying product pictures..."
-    mkdir -p assets/product_pictures
-    cp -r ../apps/web/public/assets/product_pictures/* assets/product_pictures/ 2>/dev/null || true
+    mkdir -p "$ASSETS_DEST"
+    cp -r "$ASSETS_SOURCE"/* "$ASSETS_DEST"/ 2>/dev/null || true
     print_success "Product pictures copied"
+    echo ""
+elif [ -d "$ASSETS_DEST" ]; then
+    print_success "Product pictures already exist"
     echo ""
 fi
 
 # Set permissions
 echo "Setting file permissions..."
-chmod -R 755 . 2>/dev/null || true
-chmod 600 .env 2>/dev/null || true
+chmod -R 755 "$PHP_DIR" 2>/dev/null || true
+chmod 600 "$ENV_PATH" 2>/dev/null || true
 print_success "Permissions set"
 echo ""
 
@@ -453,14 +505,25 @@ if [ "$SKIP_DB" = false ]; then
             PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;" 2>/dev/null || print_info "Database already exists or creation failed"
             
             # Update .env file
-            if [ -f .env ]; then
-                sed -i.bak "s/DB_HOST=.*/DB_HOST=$DB_HOST/" .env
-                sed -i.bak "s/DB_PORT=.*/DB_PORT=$DB_PORT/" .env
-                sed -i.bak "s/DB_NAME=.*/DB_NAME=$DB_NAME/" .env
-                sed -i.bak "s/DB_USER=.*/DB_USER=$DB_USER/" .env
-                sed -i.bak "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASSWORD/" .env
-                rm -f .env.bak 2>/dev/null || true
+            if [ -f "$ENV_PATH" ]; then
+                # Use different sed syntax for macOS compatibility
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' "s/DB_HOST=.*/DB_HOST=$DB_HOST/" "$ENV_PATH"
+                    sed -i '' "s/DB_PORT=.*/DB_PORT=$DB_PORT/" "$ENV_PATH"
+                    sed -i '' "s/DB_NAME=.*/DB_NAME=$DB_NAME/" "$ENV_PATH"
+                    sed -i '' "s/DB_USER=.*/DB_USER=$DB_USER/" "$ENV_PATH"
+                    sed -i '' "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASSWORD/" "$ENV_PATH"
+                else
+                    sed -i.bak "s/DB_HOST=.*/DB_HOST=$DB_HOST/" "$ENV_PATH"
+                    sed -i.bak "s/DB_PORT=.*/DB_PORT=$DB_PORT/" "$ENV_PATH"
+                    sed -i.bak "s/DB_NAME=.*/DB_NAME=$DB_NAME/" "$ENV_PATH"
+                    sed -i.bak "s/DB_USER=.*/DB_USER=$DB_USER/" "$ENV_PATH"
+                    sed -i.bak "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASSWORD/" "$ENV_PATH"
+                    rm -f "${ENV_PATH}.bak" 2>/dev/null || true
+                fi
                 print_success ".env file updated with database credentials"
+            else
+                print_warning ".env file not found at $ENV_PATH - cannot update database credentials"
             fi
             
             # Check if schema exists
@@ -486,17 +549,22 @@ if [ "$SKIP_DB" = false ]; then
 fi
 
 # Generate JWT secret if not set
-if [ -f .env ]; then
-    if grep -q "JWT_SECRET=your-secret-key-change-this-in-production" .env; then
+if [ -f "$ENV_PATH" ]; then
+    if grep -q "JWT_SECRET=your-secret-key-change-this-in-production" "$ENV_PATH" 2>/dev/null; then
         JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | base64)
-        sed -i.bak "s|JWT_SECRET=.*|JWT_SECRET=$JWT_SECRET|" .env
-        rm -f .env.bak 2>/dev/null || true
+        # Use different sed syntax for macOS compatibility
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|JWT_SECRET=.*|JWT_SECRET=$JWT_SECRET|" "$ENV_PATH"
+        else
+            sed -i.bak "s|JWT_SECRET=.*|JWT_SECRET=$JWT_SECRET|" "$ENV_PATH"
+            rm -f "${ENV_PATH}.bak" 2>/dev/null || true
+        fi
         print_success "JWT secret generated"
     fi
 fi
 
 # Go back to root
-cd ..
+cd "$SCRIPT_DIR" || true
 
 echo ""
 echo "============================"
