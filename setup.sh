@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Skyzer Cloud - PHP Setup Script
-# This script sets up the PHP version of Skyzer Cloud
+# This script automatically installs all dependencies and sets up the PHP version of Skyzer Cloud
 
 set -e
 
@@ -13,6 +13,7 @@ echo ""
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -29,7 +30,190 @@ print_warning() {
 }
 
 print_info() {
-    echo -e "${YELLOW}ℹ️  $1${NC}"
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+# Detect OS
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+    elif type lsb_release >/dev/null 2>&1; then
+        OS=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
+    elif [ -f /etc/lsb-release ]; then
+        . /etc/lsb-release
+        OS=$DISTRIB_ID
+    elif [ -f /etc/debian_version ]; then
+        OS=debian
+    else
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    fi
+    echo "$OS"
+}
+
+# Check if running as root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_warning "Some operations require root privileges. You may be prompted for your password."
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+}
+
+# Install PHP and extensions
+install_php() {
+    OS=$(detect_os)
+    print_info "Detected OS: $OS"
+    
+    if command -v php &> /dev/null; then
+        PHP_VERSION=$(php -r 'echo PHP_VERSION;' | cut -d. -f1,2)
+        PHP_VERSION_MAJOR=$(echo $PHP_VERSION | cut -d. -f1)
+        PHP_VERSION_MINOR=$(echo $PHP_VERSION | cut -d. -f2)
+        
+        if [ "$PHP_VERSION_MAJOR" -ge 8 ] && ([ "$PHP_VERSION_MAJOR" -gt 8 ] || [ "$PHP_VERSION_MINOR" -ge 1 ]); then
+            print_success "PHP $PHP_VERSION is already installed"
+            return 0
+        fi
+    fi
+    
+    print_info "Installing PHP 8.1+ and required extensions..."
+    
+    case $OS in
+        ubuntu|debian)
+            $SUDO apt update
+            $SUDO apt install -y software-properties-common
+            $SUDO add-apt-repository -y ppa:ondrej/php
+            $SUDO apt update
+            $SUDO apt install -y php8.1 php8.1-fpm php8.1-pgsql php8.1-curl php8.1-mbstring php8.1-xml php8.1-zip php8.1-cli php8.1-common
+            ;;
+        fedora|rhel|centos)
+            $SUDO dnf install -y epel-release
+            $SUDO dnf install -y https://rpms.remirepo.net/enterprise/remi-release-$(rpm -E %rhel).rpm
+            $SUDO dnf module reset php -y
+            $SUDO dnf module enable php:remi-8.1 -y
+            $SUDO dnf install -y php php-pgsql php-curl php-mbstring php-xml php-zip
+            ;;
+        arch|manjaro)
+            $SUDO pacman -Syu --noconfirm
+            $SUDO pacman -S --noconfirm php php-pgsql curl
+            ;;
+        *)
+            print_error "Unsupported OS: $OS"
+            print_info "Please install PHP 8.1+ manually with extensions: pdo, pdo_pgsql, json, curl, mbstring, openssl"
+            exit 1
+            ;;
+    esac
+    
+    print_success "PHP and extensions installed"
+}
+
+# Install PostgreSQL
+install_postgresql() {
+    OS=$(detect_os)
+    
+    if command -v psql &> /dev/null; then
+        print_success "PostgreSQL client is already installed"
+        return 0
+    fi
+    
+    print_info "Installing PostgreSQL client..."
+    
+    case $OS in
+        ubuntu|debian)
+            $SUDO apt update
+            $SUDO apt install -y postgresql-client postgresql
+            ;;
+        fedora|rhel|centos)
+            $SUDO dnf install -y postgresql postgresql-server
+            ;;
+        arch|manjaro)
+            $SUDO pacman -S --noconfirm postgresql
+            ;;
+        *)
+            print_warning "Unsupported OS for automatic PostgreSQL installation: $OS"
+            print_info "Please install PostgreSQL manually"
+            return 1
+            ;;
+    esac
+    
+    print_success "PostgreSQL installed"
+}
+
+# Install Composer
+install_composer() {
+    if command -v composer &> /dev/null; then
+        print_success "Composer is already installed"
+        return 0
+    fi
+    
+    print_info "Installing Composer..."
+    
+    EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
+    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+    ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+    
+    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+        print_error "Composer installer checksum mismatch"
+        rm -f composer-setup.php
+        exit 1
+    fi
+    
+    php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+    rm composer-setup.php
+    
+    print_success "Composer installed"
+}
+
+# Install Apache/Nginx (optional)
+install_webserver() {
+    OS=$(detect_os)
+    
+    echo ""
+    read -p "Do you want to install a web server? (apache/nginx/none) [none]: " WEBSERVER
+    WEBSERVER=${WEBSERVER:-none}
+    
+    if [ "$WEBSERVER" = "none" ]; then
+        print_info "Skipping web server installation"
+        return 0
+    fi
+    
+    case $OS in
+        ubuntu|debian)
+            if [ "$WEBSERVER" = "apache" ]; then
+                print_info "Installing Apache..."
+                $SUDO apt update
+                $SUDO apt install -y apache2 libapache2-mod-php8.1
+                $SUDO a2enmod rewrite
+                $SUDO a2enmod php8.1
+                print_success "Apache installed and configured"
+            elif [ "$WEBSERVER" = "nginx" ]; then
+                print_info "Installing Nginx..."
+                $SUDO apt update
+                $SUDO apt install -y nginx php8.1-fpm
+                print_success "Nginx installed"
+                print_warning "Please configure Nginx manually (see php/DEPLOYMENT.md)"
+            fi
+            ;;
+        fedora|rhel|centos)
+            if [ "$WEBSERVER" = "apache" ]; then
+                print_info "Installing Apache..."
+                $SUDO dnf install -y httpd php
+                $SUDO systemctl enable httpd
+                print_success "Apache installed"
+            elif [ "$WEBSERVER" = "nginx" ]; then
+                print_info "Installing Nginx..."
+                $SUDO dnf install -y nginx php-fpm
+                $SUDO systemctl enable nginx
+                print_success "Nginx installed"
+            fi
+            ;;
+        *)
+            print_warning "Automatic web server installation not supported for $OS"
+            print_info "Please install $WEBSERVER manually"
+            ;;
+    esac
 }
 
 # Check if we're in the right directory
@@ -38,82 +222,148 @@ if [ ! -d "php" ]; then
     exit 1
 fi
 
-# Check prerequisites
-echo "Checking prerequisites..."
+# Initialize
+check_root
+
+# Auto-install dependencies
+echo "============================"
+echo "Automatic Dependency Installation"
+echo "============================"
 echo ""
 
-# Check PHP
-if ! command -v php &> /dev/null; then
-    print_error "PHP is not installed. Please install PHP 8.1 or higher."
-    exit 1
-fi
+# Ask for auto-install
+read -p "Do you want to automatically install all missing dependencies? (y/n) [y]: " AUTO_INSTALL
+AUTO_INSTALL=${AUTO_INSTALL:-y}
 
-PHP_VERSION=$(php -r 'echo PHP_VERSION;' | cut -d. -f1,2)
-PHP_VERSION_MAJOR=$(echo $PHP_VERSION | cut -d. -f1)
-PHP_VERSION_MINOR=$(echo $PHP_VERSION | cut -d. -f2)
-
-if [ "$PHP_VERSION_MAJOR" -lt 8 ] || ([ "$PHP_VERSION_MAJOR" -eq 8 ] && [ "$PHP_VERSION_MINOR" -lt 1 ]); then
-    print_error "PHP 8.1 or higher is required. Found: $PHP_VERSION"
-    exit 1
-fi
-
-print_success "PHP $PHP_VERSION found"
-
-# Check PHP extensions
-echo ""
-echo "Checking PHP extensions..."
-
-REQUIRED_EXTENSIONS=("pdo" "pdo_pgsql" "json" "curl" "mbstring" "openssl")
-MISSING_EXTENSIONS=()
-
-for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-    if ! php -m | grep -q "^${ext}$"; then
-        MISSING_EXTENSIONS+=("$ext")
-    fi
-done
-
-if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
-    print_error "Missing PHP extensions: ${MISSING_EXTENSIONS[*]}"
-    print_info "Install them with: sudo apt install php${PHP_VERSION_MAJOR}.${PHP_VERSION_MINOR}-pgsql php${PHP_VERSION_MAJOR}.${PHP_VERSION_MINOR}-curl php${PHP_VERSION_MAJOR}.${PHP_VERSION_MINOR}-mbstring"
-    exit 1
-fi
-
-print_success "All required PHP extensions found"
-
-# Check Composer
-if ! command -v composer &> /dev/null; then
-    print_warning "Composer is not installed. Installing Composer..."
+if [[ $AUTO_INSTALL =~ ^[Yy]$ ]]; then
+    # Install PHP
+    install_php
     
-    if command -v curl &> /dev/null; then
-        EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
-        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-        ACTUAL_CHECKSUM="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-        
-        if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
-            print_error "Composer installer checksum mismatch"
-            rm -f composer-setup.php
-            exit 1
-        fi
-        
-        php composer-setup.php --install-dir=/usr/local/bin --filename=composer
-        rm composer-setup.php
-        print_success "Composer installed"
-    else
-        print_error "curl is required to install Composer. Please install Composer manually."
+    # Verify PHP installation
+    if ! command -v php &> /dev/null; then
+        print_error "PHP installation failed"
         exit 1
     fi
+    
+    PHP_VERSION=$(php -r 'echo PHP_VERSION;')
+    print_success "PHP $PHP_VERSION is ready"
+    
+    # Check PHP extensions
+    echo ""
+    echo "Verifying PHP extensions..."
+    REQUIRED_EXTENSIONS=("pdo" "pdo_pgsql" "json" "curl" "mbstring" "openssl")
+    MISSING_EXTENSIONS=()
+    
+    for ext in "${REQUIRED_EXTENSIONS[@]}"; do
+        if ! php -m | grep -q "^${ext}$"; then
+            MISSING_EXTENSIONS+=("$ext")
+        fi
+    done
+    
+    if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
+        print_warning "Some PHP extensions are missing: ${MISSING_EXTENSIONS[*]}"
+        print_info "Trying to install missing extensions..."
+        
+        OS=$(detect_os)
+        case $OS in
+            ubuntu|debian)
+                PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+                for ext in "${MISSING_EXTENSIONS[@]}"; do
+                    case $ext in
+                        pdo_pgsql)
+                            $SUDO apt install -y php${PHP_VER}-pgsql 2>/dev/null || true
+                            ;;
+                        curl)
+                            $SUDO apt install -y php${PHP_VER}-curl 2>/dev/null || true
+                            ;;
+                        mbstring)
+                            $SUDO apt install -y php${PHP_VER}-mbstring 2>/dev/null || true
+                            ;;
+                    esac
+                done
+                ;;
+        esac
+    fi
+    
+    print_success "All required PHP extensions available"
+    
+    # Install Composer
+    install_composer
+    
+    # Install PostgreSQL (optional)
+    echo ""
+    read -p "Do you want to install PostgreSQL? (y/n) [y]: " INSTALL_PG
+    INSTALL_PG=${INSTALL_PG:-y}
+    
+    if [[ $INSTALL_PG =~ ^[Yy]$ ]]; then
+        install_postgresql
+        SKIP_DB=false
+    else
+        SKIP_DB=true
+        print_info "PostgreSQL installation skipped"
+    fi
+    
+    # Install Web Server (optional)
+    install_webserver
+    
 else
+    # Manual check mode
+    echo ""
+    echo "Checking prerequisites (manual mode)..."
+    echo ""
+    
+    # Check PHP
+    if ! command -v php &> /dev/null; then
+        print_error "PHP is not installed. Please install PHP 8.1 or higher."
+        exit 1
+    fi
+    
+    PHP_VERSION=$(php -r 'echo PHP_VERSION;' | cut -d. -f1,2)
+    PHP_VERSION_MAJOR=$(echo $PHP_VERSION | cut -d. -f1)
+    PHP_VERSION_MINOR=$(echo $PHP_VERSION | cut -d. -f2)
+    
+    if [ "$PHP_VERSION_MAJOR" -lt 8 ] || ([ "$PHP_VERSION_MAJOR" -eq 8 ] && [ "$PHP_VERSION_MINOR" -lt 1 ]); then
+        print_error "PHP 8.1 or higher is required. Found: $PHP_VERSION"
+        exit 1
+    fi
+    
+    print_success "PHP $PHP_VERSION found"
+    
+    # Check PHP extensions
+    echo ""
+    echo "Checking PHP extensions..."
+    REQUIRED_EXTENSIONS=("pdo" "pdo_pgsql" "json" "curl" "mbstring" "openssl")
+    MISSING_EXTENSIONS=()
+    
+    for ext in "${REQUIRED_EXTENSIONS[@]}"; do
+        if ! php -m | grep -q "^${ext}$"; then
+            MISSING_EXTENSIONS+=("$ext")
+        fi
+    done
+    
+    if [ ${#MISSING_EXTENSIONS[@]} -gt 0 ]; then
+        print_error "Missing PHP extensions: ${MISSING_EXTENSIONS[*]}"
+        exit 1
+    fi
+    
+    print_success "All required PHP extensions found"
+    
+    # Check Composer
+    if ! command -v composer &> /dev/null; then
+        print_error "Composer is not installed. Please install Composer."
+        exit 1
+    fi
+    
     print_success "Composer found"
-fi
-
-# Check PostgreSQL
-if ! command -v psql &> /dev/null; then
-    print_warning "PostgreSQL client not found. Database setup will be skipped."
-    print_info "Install PostgreSQL client: sudo apt install postgresql-client"
-    SKIP_DB=true
-else
-    print_success "PostgreSQL client found"
-    SKIP_DB=false
+    
+    # Check PostgreSQL
+    if ! command -v psql &> /dev/null; then
+        print_warning "PostgreSQL client not found. Database setup will be skipped."
+        SKIP_DB=true
+    else
+        print_success "PostgreSQL client found"
+        SKIP_DB=false
+    fi
 fi
 
 echo ""
@@ -253,7 +503,20 @@ echo "============================"
 print_success "Setup complete!"
 echo "============================"
 echo ""
+echo "Summary:"
+echo "--------"
+echo "✅ PHP and extensions installed"
+echo "✅ Composer installed"
+if [ "$SKIP_DB" = false ]; then
+    echo "✅ PostgreSQL installed"
+else
+    echo "⚠️  PostgreSQL not installed (optional)"
+fi
+echo "✅ Project dependencies installed"
+echo "✅ Configuration files created"
+echo ""
 echo "Next steps:"
+echo "----------"
 echo ""
 echo "1. Edit php/.env with your configuration:"
 echo "   - Database credentials"
