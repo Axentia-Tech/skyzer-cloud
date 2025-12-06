@@ -624,6 +624,10 @@ configure_nginx() {
     read -p "Enter your domain name (or press Enter for localhost): " DOMAIN_NAME
     DOMAIN_NAME=${DOMAIN_NAME:-localhost}
     
+    # Get port
+    read -p "Enter port number (or press Enter for 3000): " PORT_NUMBER
+    PORT_NUMBER=${PORT_NUMBER:-3000}
+    
     # Get PHP version
     PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
     PHP_FPM_SOCK="/var/run/php/php${PHP_VER}-fpm.sock"
@@ -642,12 +646,12 @@ configure_nginx() {
     NGINX_CONFIG="/etc/nginx/sites-available/skyzer-cloud"
     NGINX_ENABLED="/etc/nginx/sites-enabled/skyzer-cloud"
     
-    print_info "Creating Nginx configuration..."
+    print_info "Creating Nginx configuration for port $PORT_NUMBER..."
     
     $SUDO tee "$NGINX_CONFIG" > /dev/null << EOF
 # Skyzer Cloud - PHP Application
 server {
-    listen 80;
+    listen ${PORT_NUMBER};
     server_name ${DOMAIN_NAME};
     root ${PHP_DIR};
     index index.php;
@@ -953,7 +957,11 @@ if command -v nginx &> /dev/null; then
     echo "🌐 Web server: Nginx (configured)"
     if [ ! -z "$DOMAIN_NAME" ]; then
         echo "🔗 Domain: $DOMAIN_NAME"
-        echo "🌍 Access: http://$DOMAIN_NAME"
+        if [ ! -z "$PORT_NUMBER" ] && [ "$PORT_NUMBER" != "80" ]; then
+            echo "🌍 Access: http://$DOMAIN_NAME:$PORT_NUMBER"
+        else
+            echo "🌍 Access: http://$DOMAIN_NAME"
+        fi
     fi
 fi
 echo ""
@@ -970,10 +978,18 @@ echo "   cd packages/db && npx prisma migrate deploy"
 echo "   OR create tables manually based on schema.prisma"
 echo ""
 echo "3. Test your application:"
-if [ ! -z "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "localhost" ]; then
-    echo "   Visit: http://$DOMAIN_NAME"
+if [ ! -z "$PORT_NUMBER" ] && [ "$PORT_NUMBER" != "80" ]; then
+    if [ ! -z "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "localhost" ]; then
+        echo "   Visit: http://$DOMAIN_NAME:$PORT_NUMBER"
+    else
+        echo "   Visit: http://localhost:$PORT_NUMBER"
+    fi
 else
-    echo "   Visit: http://localhost"
+    if [ ! -z "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "localhost" ]; then
+        echo "   Visit: http://$DOMAIN_NAME"
+    else
+        echo "   Visit: http://localhost"
+    fi
 fi
 echo ""
 echo "4. For SSL/HTTPS (production):"
