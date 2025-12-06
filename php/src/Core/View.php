@@ -9,16 +9,23 @@ class View
         extract($data);
         
         $viewFile = __DIR__ . '/../../views/' . $view . '.php';
+        $layoutFile = __DIR__ . '/../../views/layout.php';
         
         if (!file_exists($viewFile)) {
-            throw new \Exception("View file not found: {$view}");
+            error_log("View file not found: {$viewFile}");
+            throw new \Exception("View file not found: {$view} (Path: {$viewFile})");
+        }
+        
+        if (!file_exists($layoutFile)) {
+            error_log("Layout file not found: {$layoutFile}");
+            throw new \Exception("Layout file not found: layout.php (Path: {$layoutFile})");
         }
 
         // Set view variable for layout
         $GLOBALS['view'] = $view;
         $GLOBALS['viewData'] = $data;
         
-        require_once __DIR__ . '/../../views/layout.php';
+        require_once $layoutFile;
     }
 
     public static function renderPartial(string $view, array $data = []): string

@@ -654,7 +654,7 @@ server {
     listen ${PORT_NUMBER};
     server_name ${DOMAIN_NAME};
     root ${PHP_DIR};
-    index index.php;
+    index index.php index.html;
     
     # Logs
     access_log /var/log/nginx/skyzer-cloud-access.log;
@@ -665,18 +665,30 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
     
-    # Main location
+    # Main location - try files first, then route to index.php
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
     
+    # Assets directory
+    location /assets/ {
+        alias ${PHP_DIR}/assets/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+    
     # PHP processing
     location ~ \.php$ {
+        try_files \$uri =404;
         fastcgi_pass unix:${PHP_FPM_SOCK};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
         fastcgi_read_timeout 300;
+        fastcgi_buffer_size 128k;
+        fastcgi_buffers 4 256k;
+        fastcgi_busy_buffers_size 256k;
     }
     
     # Deny access to hidden files
@@ -687,7 +699,7 @@ server {
     }
     
     # Deny access to sensitive files
-    location ~ ^/(\.env|composer\.(json|lock)|package\.json|node_modules) {
+    location ~ ^/(\.env|composer\.(json|lock)|package\.json|node_modules|vendor) {
         deny all;
         access_log off;
         log_not_found off;
@@ -702,6 +714,12 @@ server {
     
     # Client body size
     client_max_body_size 100M;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/json;
 }
 EOF
     
@@ -716,8 +734,18 @@ EOF
         print_success "Nginx configuration is valid"
         $SUDO systemctl reload nginx 2>/dev/null || $SUDO service nginx reload 2>/dev/null || true
         print_success "Nginx reloaded"
+        
+        # Verify the root directory exists and is readable
+        if [ ! -d "$PHP_DIR" ]; then
+            print_error "PHP directory does not exist: $PHP_DIR"
+        elif [ ! -f "$PHP_DIR/index.php" ]; then
+            print_error "index.php not found in: $PHP_DIR"
+        else
+            print_success "Application files verified"
+        fi
     else
         print_error "Nginx configuration test failed. Please check manually."
+        print_info "Run: sudo nginx -t"
     fi
 }
 
@@ -913,7 +941,35 @@ final_checks() {
     if [ -f "$PHP_DIR/index.php" ]; then
         print_success "Application files are in place"
     else
-        print_error "Application files missing"
+        print_error "Application files missing: $PHP_DIR/index.php"
+    fi
+    
+    # Check vendor directory
+    if [ -d "$PHP_DIR/vendor" ]; then
+        print_success "Composer vendor directory exists"
+    else
+        print_error "Composer vendor directory missing. Run: cd php && composer install"
+    fi
+    
+    # Check views directory
+    if [ -d "$PHP_DIR/views" ]; then
+        print_success "Views directory exists"
+    else
+        print_error "Views directory missing"
+    fi
+    
+    # Check assets directory
+    if [ -d "$PHP_DIR/assets" ]; then
+        print_success "Assets directory exists"
+    else
+        print_warning "Assets directory missing (will be created on first use)"
+    fi
+    
+    # Check .env file
+    if [ -f "$ENV_PATH" ]; then
+        print_success ".env file exists"
+    else
+        print_warning ".env file missing (will be created from .env.example)"
     fi
 }
 
