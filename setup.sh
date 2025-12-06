@@ -255,7 +255,13 @@ if [[ $AUTO_INSTALL =~ ^[Yy]$ ]]; then
     MISSING_EXTENSIONS=()
     
     for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-        if ! php -m | grep -q "^${ext}$"; then
+        # Check if extension is loaded (pdo might be built-in)
+        if ! php -m | grep -q "^${ext}$" && ! php -m | grep -q "PDO" && [ "$ext" = "pdo" ]; then
+            # pdo is usually built-in, check differently
+            if ! php -r "if (!extension_loaded('pdo')) exit(1);" 2>/dev/null; then
+                MISSING_EXTENSIONS+=("$ext")
+            fi
+        elif ! php -m | grep -q "^${ext}$"; then
             MISSING_EXTENSIONS+=("$ext")
         fi
     done
@@ -270,6 +276,10 @@ if [[ $AUTO_INSTALL =~ ^[Yy]$ ]]; then
                 PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
                 for ext in "${MISSING_EXTENSIONS[@]}"; do
                     case $ext in
+                        pdo)
+                            # pdo is usually built-in, but try installing php-pdo if needed
+                            $SUDO apt install -y php${PHP_VER}-common 2>/dev/null || true
+                            ;;
                         pdo_pgsql)
                             $SUDO apt install -y php${PHP_VER}-pgsql 2>/dev/null || true
                             ;;
@@ -283,9 +293,28 @@ if [[ $AUTO_INSTALL =~ ^[Yy]$ ]]; then
                 done
                 ;;
         esac
+        
+        # Re-check after installation
+        MISSING_AFTER=()
+        for ext in "${MISSING_EXTENSIONS[@]}"; do
+            if [ "$ext" = "pdo" ]; then
+                if ! php -r "if (!extension_loaded('pdo')) exit(1);" 2>/dev/null; then
+                    MISSING_AFTER+=("$ext")
+                fi
+            elif ! php -m | grep -q "^${ext}$"; then
+                MISSING_AFTER+=("$ext")
+            fi
+        done
+        
+        if [ ${#MISSING_AFTER[@]} -eq 0 ]; then
+            print_success "All required PHP extensions are now available"
+        else
+            print_warning "Some extensions may still be missing: ${MISSING_AFTER[*]}"
+            print_info "You may need to install them manually or restart PHP-FPM"
+        fi
+    else
+        print_success "All required PHP extensions available"
     fi
-    
-    print_success "All required PHP extensions available"
     
     # Install Composer
     install_composer
