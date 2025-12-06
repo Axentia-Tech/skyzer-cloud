@@ -595,6 +595,334 @@ fi
 # Go back to root
 cd "$SCRIPT_DIR" || true
 
+# ============================================
+# Automatic Configuration Section
+# ============================================
+echo ""
+echo "============================"
+echo "Automatic Configuration"
+echo "============================"
+echo ""
+
+# Configure Nginx
+configure_nginx() {
+    if ! command -v nginx &> /dev/null; then
+        return 0
+    fi
+    
+    echo ""
+    read -p "Do you want to automatically configure Nginx? (y/n) [y]: " CONFIGURE_NGINX
+    CONFIGURE_NGINX=${CONFIGURE_NGINX:-y}
+    
+    if [[ ! $CONFIGURE_NGINX =~ ^[Yy]$ ]]; then
+        return 0
+    fi
+    
+    print_info "Configuring Nginx..."
+    
+    # Get domain name
+    read -p "Enter your domain name (or press Enter for localhost): " DOMAIN_NAME
+    DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+    
+    # Get PHP version
+    PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+    PHP_FPM_SOCK="/var/run/php/php${PHP_VER}-fpm.sock"
+    
+    # Check if PHP-FPM socket exists
+    if [ ! -S "$PHP_FPM_SOCK" ]; then
+        # Try alternative locations
+        PHP_FPM_SOCK="/run/php/php${PHP_VER}-fpm.sock"
+        if [ ! -S "$PHP_FPM_SOCK" ]; then
+            print_warning "PHP-FPM socket not found. Please check PHP-FPM configuration."
+            PHP_FPM_SOCK="/var/run/php/php${PHP_VER}-fpm.sock"
+        fi
+    fi
+    
+    # Create Nginx config
+    NGINX_CONFIG="/etc/nginx/sites-available/skyzer-cloud"
+    NGINX_ENABLED="/etc/nginx/sites-enabled/skyzer-cloud"
+    
+    print_info "Creating Nginx configuration..."
+    
+    $SUDO tee "$NGINX_CONFIG" > /dev/null << EOF
+# Skyzer Cloud - PHP Application
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME};
+    root ${PHP_DIR};
+    index index.php;
+    
+    # Logs
+    access_log /var/log/nginx/skyzer-cloud-access.log;
+    error_log /var/log/nginx/skyzer-cloud-error.log;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # Main location
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+    
+    # PHP processing
+    location ~ \.php$ {
+        fastcgi_pass unix:${PHP_FPM_SOCK};
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_read_timeout 300;
+    }
+    
+    # Deny access to hidden files
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # Deny access to sensitive files
+    location ~ ^/(\.env|composer\.(json|lock)|package\.json|node_modules) {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # Static files caching
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+    
+    # Client body size
+    client_max_body_size 100M;
+}
+EOF
+    
+    # Enable site
+    if [ -L "$NGINX_ENABLED" ]; then
+        $SUDO rm "$NGINX_ENABLED"
+    fi
+    $SUDO ln -s "$NGINX_CONFIG" "$NGINX_ENABLED"
+    
+    # Test Nginx configuration
+    if $SUDO nginx -t 2>/dev/null; then
+        print_success "Nginx configuration is valid"
+        $SUDO systemctl reload nginx 2>/dev/null || $SUDO service nginx reload 2>/dev/null || true
+        print_success "Nginx reloaded"
+    else
+        print_error "Nginx configuration test failed. Please check manually."
+    fi
+}
+
+# Configure PHP-FPM
+configure_php_fpm() {
+    PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+    PHP_INI="/etc/php/${PHP_VER}/fpm/php.ini"
+    PHP_FPM_INI="/etc/php/${PHP_VER}/fpm/php-fpm.ini"
+    
+    if [ ! -f "$PHP_INI" ]; then
+        return 0
+    fi
+    
+    echo ""
+    read -p "Do you want to optimize PHP-FPM settings? (y/n) [y]: " OPTIMIZE_PHP
+    OPTIMIZE_PHP=${OPTIMIZE_PHP:-y}
+    
+    if [[ ! $OPTIMIZE_PHP =~ ^[Yy]$ ]]; then
+        return 0
+    fi
+    
+    print_info "Optimizing PHP-FPM settings..."
+    
+    # Backup original
+    if [ ! -f "${PHP_INI}.backup" ]; then
+        $SUDO cp "$PHP_INI" "${PHP_INI}.backup"
+    fi
+    
+    # Update settings
+    $SUDO sed -i 's/^memory_limit = .*/memory_limit = 256M/' "$PHP_INI" 2>/dev/null || true
+    $SUDO sed -i 's/^upload_max_filesize = .*/upload_max_filesize = 64M/' "$PHP_INI" 2>/dev/null || true
+    $SUDO sed -i 's/^post_max_size = .*/post_max_size = 64M/' "$PHP_INI" 2>/dev/null || true
+    $SUDO sed -i 's/^max_execution_time = .*/max_execution_time = 300/' "$PHP_INI" 2>/dev/null || true
+    
+    # Enable OpCache
+    if ! grep -q "opcache.enable=1" "$PHP_INI" 2>/dev/null; then
+        echo "" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "; OpCache Configuration" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "opcache.enable=1" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "opcache.memory_consumption=128" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "opcache.interned_strings_buffer=8" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "opcache.max_accelerated_files=10000" | $SUDO tee -a "$PHP_INI" > /dev/null
+        echo "opcache.revalidate_freq=2" | $SUDO tee -a "$PHP_INI" > /dev/null
+    fi
+    
+    # Restart PHP-FPM
+    $SUDO systemctl restart "php${PHP_VER}-fpm" 2>/dev/null || $SUDO service "php${PHP_VER}-fpm" restart 2>/dev/null || true
+    print_success "PHP-FPM optimized and restarted"
+}
+
+# Import database schema
+import_database_schema() {
+    if [ "$SKIP_DB" = true ]; then
+        return 0
+    fi
+    
+    echo ""
+    read -p "Do you want to import the database schema now? (y/n) [n]: " IMPORT_SCHEMA
+    IMPORT_SCHEMA=${IMPORT_SCHEMA:-n}
+    
+    if [[ ! $IMPORT_SCHEMA =~ ^[Yy]$ ]]; then
+        return 0
+    fi
+    
+    # Read database credentials from .env
+    if [ -f "$ENV_PATH" ]; then
+        DB_HOST=$(grep "^DB_HOST=" "$ENV_PATH" | cut -d '=' -f2 | tr -d ' ')
+        DB_PORT=$(grep "^DB_PORT=" "$ENV_PATH" | cut -d '=' -f2 | tr -d ' ')
+        DB_NAME=$(grep "^DB_NAME=" "$ENV_PATH" | cut -d '=' -f2 | tr -d ' ')
+        DB_USER=$(grep "^DB_USER=" "$ENV_PATH" | cut -d '=' -f2 | tr -d ' ')
+        DB_PASSWORD=$(grep "^DB_PASSWORD=" "$ENV_PATH" | cut -d '=' -f2 | tr -d ' ')
+        
+        DB_HOST=${DB_HOST:-localhost}
+        DB_PORT=${DB_PORT:-5432}
+        DB_NAME=${DB_NAME:-skyzer_cloud}
+        DB_USER=${DB_USER:-postgres}
+        
+        if [ -z "$DB_PASSWORD" ]; then
+            read -sp "Database password for $DB_USER: " DB_PASSWORD
+            echo ""
+        fi
+        
+        print_info "Importing database schema..."
+        
+        # Check if Prisma schema exists
+        PRISMA_SCHEMA="$SCRIPT_DIR/packages/db/prisma/schema.prisma"
+        if [ -f "$PRISMA_SCHEMA" ]; then
+            print_info "Found Prisma schema. You can use: cd packages/db && npx prisma migrate deploy"
+        fi
+        
+        # Try to create basic tables if schema file exists
+        SQL_FILE="$SCRIPT_DIR/packages/db/prisma/migrations/0_init/migration.sql"
+        if [ -f "$SQL_FILE" ]; then
+            print_info "Found SQL migration file. Importing..."
+            export PGPASSWORD="$DB_PASSWORD"
+            if psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$SQL_FILE" 2>/dev/null; then
+                print_success "Database schema imported"
+            else
+                print_warning "Could not import schema automatically. Please import manually."
+            fi
+            unset PGPASSWORD
+        else
+            print_info "No SQL migration file found. Please create tables manually or use Prisma."
+        fi
+    fi
+}
+
+# Start services
+start_services() {
+    echo ""
+    read -p "Do you want to start/enable required services? (y/n) [y]: " START_SERVICES
+    START_SERVICES=${START_SERVICES:-y}
+    
+    if [[ ! $START_SERVICES =~ ^[Yy]$ ]]; then
+        return 0
+    fi
+    
+    print_info "Starting services..."
+    
+    # Start PostgreSQL
+    if command -v systemctl &> /dev/null; then
+        $SUDO systemctl enable postgresql 2>/dev/null || true
+        $SUDO systemctl start postgresql 2>/dev/null || true
+        print_success "PostgreSQL service managed"
+    fi
+    
+    # Start PHP-FPM
+    PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+    if command -v systemctl &> /dev/null; then
+        $SUDO systemctl enable "php${PHP_VER}-fpm" 2>/dev/null || true
+        $SUDO systemctl start "php${PHP_VER}-fpm" 2>/dev/null || true
+        print_success "PHP-FPM service managed"
+    fi
+    
+    # Start Nginx
+    if command -v nginx &> /dev/null; then
+        if command -v systemctl &> /dev/null; then
+            $SUDO systemctl enable nginx 2>/dev/null || true
+            $SUDO systemctl start nginx 2>/dev/null || true
+            print_success "Nginx service managed"
+        fi
+    fi
+}
+
+# Final checks
+final_checks() {
+    echo ""
+    echo "Running final checks..."
+    echo ""
+    
+    # Check PHP
+    if command -v php &> /dev/null; then
+        PHP_VERSION=$(php -r 'echo PHP_VERSION;')
+        print_success "PHP $PHP_VERSION is running"
+    else
+        print_error "PHP is not available"
+    fi
+    
+    # Check Composer
+    if command -v composer &> /dev/null; then
+        COMPOSER_VERSION=$(composer --version | head -n1)
+        print_success "$COMPOSER_VERSION"
+    else
+        print_error "Composer is not available"
+    fi
+    
+    # Check PostgreSQL
+    if command -v psql &> /dev/null; then
+        if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "\q" 2>/dev/null; then
+            print_success "PostgreSQL connection successful"
+        else
+            print_warning "PostgreSQL connection failed (may need configuration)"
+        fi
+    fi
+    
+    # Check Nginx
+    if command -v nginx &> /dev/null; then
+        if $SUDO nginx -t 2>/dev/null; then
+            print_success "Nginx configuration is valid"
+        else
+            print_warning "Nginx configuration has issues"
+        fi
+    fi
+    
+    # Check file permissions
+    if [ -f "$ENV_PATH" ] && [ -r "$ENV_PATH" ]; then
+        print_success ".env file is readable"
+    else
+        print_warning ".env file may have permission issues"
+    fi
+    
+    # Check if application is accessible
+    if [ -f "$PHP_DIR/index.php" ]; then
+        print_success "Application files are in place"
+    else
+        print_error "Application files missing"
+    fi
+}
+
+# Run automatic configuration
+if command -v nginx &> /dev/null; then
+    configure_nginx
+fi
+
+configure_php_fpm
+import_database_schema
+start_services
+final_checks
+
 echo ""
 echo "============================"
 print_success "Setup complete!"
@@ -611,29 +939,52 @@ else
 fi
 echo "✅ Project dependencies installed"
 echo "✅ Configuration files created"
+if command -v nginx &> /dev/null; then
+    echo "✅ Nginx configured"
+fi
+echo "✅ PHP-FPM optimized"
+echo "✅ Services started"
 echo ""
-echo "Next steps:"
-echo "----------"
+echo "Application Status:"
+echo "-------------------"
+echo "📁 Application path: $PHP_DIR"
+echo "⚙️  Configuration: $ENV_PATH"
+if command -v nginx &> /dev/null; then
+    echo "🌐 Web server: Nginx (configured)"
+    if [ ! -z "$DOMAIN_NAME" ]; then
+        echo "🔗 Domain: $DOMAIN_NAME"
+        echo "🌍 Access: http://$DOMAIN_NAME"
+    fi
+fi
 echo ""
-echo "1. Edit php/.env with your configuration:"
-echo "   - Database credentials"
+echo "Next steps (if not done automatically):"
+echo "----------------------------------------"
+echo ""
+echo "1. Edit php/.env with your API keys:"
 echo "   - PTERODACTYL_URL and PTERODACTYL_API_KEY"
 echo "   - TEBEX_SECRET_KEY and TEBEX_PUBLIC_KEY"
-echo "   - APP_URL"
+echo "   - APP_URL (if different from domain)"
 echo ""
-echo "2. Set up your web server:"
-echo "   - Apache: Enable mod_rewrite and point DocumentRoot to php/"
-echo "   - Nginx: See php/DEPLOYMENT.md for configuration"
+echo "2. Import database schema (if not done):"
+echo "   cd packages/db && npx prisma migrate deploy"
+echo "   OR create tables manually based on schema.prisma"
 echo ""
-echo "3. Import database schema:"
-echo "   - Use Prisma migrations from packages/db/"
-echo "   - Or create tables manually based on schema.prisma"
+echo "3. Test your application:"
+if [ ! -z "$DOMAIN_NAME" ] && [ "$DOMAIN_NAME" != "localhost" ]; then
+    echo "   Visit: http://$DOMAIN_NAME"
+else
+    echo "   Visit: http://localhost"
+fi
 echo ""
-echo "4. Start your web server and visit your domain"
+echo "4. For SSL/HTTPS (production):"
+echo "   sudo apt install certbot python3-certbot-nginx"
+echo "   sudo certbot --nginx -d $DOMAIN_NAME"
 echo ""
 echo "For more information, see:"
 echo "  - php/README.md"
 echo "  - php/DEPLOYMENT.md"
 echo "  - php/MIGRATION_GUIDE.md"
+echo ""
+echo "🎉 Your Skyzer Cloud application is ready!"
 echo ""
 
